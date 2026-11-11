@@ -1,0 +1,34 @@
+import { expect, it, vi } from 'vitest';
+import { normalizeBaseUrl } from '../base-url.js';
+import { isBlockedAddress } from '../ip-policy.js';
+import { resolveAllowed, setResolver } from '../egress.js';
+import { buildFilter } from '../filter.js';
+import { allowPrivateBaseUrl, maxUpstreamBytes, narrowTiers, parseToolTiers } from '../config.js';
+import { ALL_TOOL_DEFS, buildToolset } from '../tools/index.js';
+import { mockApi } from './helpers.js';
+import { renderSafe, redactText } from '../redact.js';
+import { logger } from '../utils/logger.js';
+it.each(['http://sc-eval.screenconnect.com', 'https://127.0.0.1', 'https://10.0.0.1', 'https://localhost', 'https://your-instance.screenconnect.com', 'https://example.com', 'https://sc-eval.screenconnect.com?x=1', 'https://user:pass@sc-eval.screenconnect.com'])('rejects unsafe base URL %s', url => { expect(() => normalizeBaseUrl(url)).toThrow(); });
+it('allows private HTTPS locally but always refuses HTTP', () => { expect(normalizeBaseUrl('https://10.0.0.1', { allowPrivate: true })).toBe('https://10.0.0.1'); expect(() => normalizeBaseUrl('http://10.0.0.1', { allowPrivate: true })).toThrow(); });
+it.each(['127.0.0.1', '10.0.0.1', '169.254.169.254', '100.64.0.1', '::1', 'fc00::1', '::ffff:127.0.0.1', '64:ff9b::a9fe:a9fe', '2002:0a00:0001::1'])('blocks address %s', ip => expect(isBlockedAddress(ip)).toBe(true));
+it('rejects a mixed DNS answer and detects rebinding', async () => {
+  setResolver(async () => [{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }]);
+  await expect(resolveAllowed('sc-eval.screenconnect.com', false)).rejects.toThrow('refusing');
+  let count = 0; setResolver(async () => [{ address: count++ ? '127.0.0.1' : '8.8.8.8', family: 4 }]);
+  await expect(resolveAllowed('sc-eval.screenconnect.com', false)).resolves.toHaveLength(1);
+  await expect(resolveAllowed('sc-eval.screenconnect.com', false)).rejects.toThrow();
+});
+it('escapes quote injection in every structured field', () => {
+  const injected = "a' OR Name = 'b";
+  expect(buildFilter({ name: injected, customProperties: { '1': injected }, onlineOnly: true })).toBe("Name = 'a'' OR Name = ''b' AND CustomProperty1 = 'a'' OR Name = ''b' AND GuestConnectedCount > 0");
+});
+it('raw filter is exclusive with all structured fields', () => { expect(() => buildFilter({ filter: 'Name LIKE *', onlineOnly: false })).toThrow('mutually exclusive'); expect(buildFilter({ filter: "Name = 'ENDPOINT-01'" })).toBe("Name = 'ENDPOINT-01'"); });
+it('defaults to read only and rejects unknown tier names', () => { expect([...parseToolTiers(undefined)]).toEqual(['read']); expect(() => parseToolTiers('admn')).toThrow(); expect(buildToolset(parseToolTiers(undefined)).tools).toHaveLength(6); });
+it('headers only narrow and an empty header exposes no tools', () => { expect([...narrowTiers(new Set(['read']), 'read,write,admin')]).toEqual(['read']); expect(narrowTiers(new Set(['read']), '').size).toBe(0); });
+it('disabled tools cannot be called', async () => { const spy = mockApi(); expect((await buildToolset(new Set(['read'])).dispatch('screenconnect_session_add_note', {})).isError).toBe(true); expect(spy).not.toHaveBeenCalled(); });
+it.each(ALL_TOOL_DEFS.filter(d => d.tier === 'admin'))('$tool.name requires confirm true', async d => { const spy = mockApi(); expect((await buildToolset(new Set(['admin'])).dispatch(d.tool.name, { confirm: false })).isError).toBe(true); expect(spy).not.toHaveBeenCalled(); expect(d.tool.description).toContain('⚠ HIGH-IMPACT'); expect(d.tool.annotations?.destructiveHint).toBe(true); });
+it('every tool declares all required annotations', () => { for (const d of ALL_TOOL_DEFS) for (const key of ['readOnlyHint', 'destructiveHint', 'idempotentHint']) expect(d.tool.annotations).toHaveProperty(key); });
+it('gateway ignores local private-host escape hatch', () => { vi.stubEnv('AUTH_MODE', 'gateway'); vi.stubEnv('SCREENCONNECT_ALLOW_PRIVATE_BASE_URL', '1'); expect(allowPrivateBaseUrl()).toBe(false); });
+it('upstream byte limit defaults and ceiling', () => { expect(maxUpstreamBytes()).toBe(16 * 1024 * 1024); vi.stubEnv('SCREENCONNECT_MAX_UPSTREAM_BYTES', '999999999'); expect(maxUpstreamBytes()).toBe(128 * 1024 * 1024); });
+it('redacts exact secrets including short and JSON-escaped values before truncating', () => { expect(redactText('xx', ['x'])).not.toContain('x'); expect(renderSafe({ value: 'a"b\\c' }, 1000, ['a"b\\c'])).toContain('[REDACTED]'); expect(renderSafe({ password: 'hidden', value: 'secret' }, 20, ['secret'])).not.toContain('hidden'); });
+it('logger removes credentials from message and context', () => { const log = vi.spyOn(console, 'error').mockImplementation(() => {}); logger.error('eval-secret-not-real-0000', { value: 'eval-secret-not-real-0000' }); expect(JSON.stringify(log.mock.calls)).not.toContain('eval-secret-not-real-0000'); });
