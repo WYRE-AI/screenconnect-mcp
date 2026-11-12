@@ -1,8 +1,9 @@
 import { ALL_TIERS, parseToolTiers, type ToolTier } from '../config.js';
+import { HUNT_TOOL } from './hunt.js';
 import { SESSION_TOOLS } from './sessions.js';
 import { buildToolset as build, type Toolset } from './shared.js';
 export type { Toolset } from './shared.js';
-export const ALL_TOOL_DEFS = SESSION_TOOLS;
+export const ALL_TOOL_DEFS = [...SESSION_TOOLS, HUNT_TOOL];
 export function buildToolset(tiers: ReadonlySet<ToolTier>): Toolset { return build(tiers, ALL_TOOL_DEFS); }
 let defaultToolset: Toolset | undefined;
 const cache = new Map<string, Toolset>();

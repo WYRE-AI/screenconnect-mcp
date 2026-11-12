@@ -27,9 +27,9 @@ it('rejects unauthenticated requests before reading vendor credentials', async (
 it('gateway never falls back to env creds when headers are missing', async () => { expect((await request('/mcp', { 'x-gateway-s2s': proof() })).status).toBe(401); expect(state.response).toBeUndefined(); });
 it('accepts signed request-scoped headers including optional origin and extension', async () => {
   await request('/mcp', { ...vendor, 'x-gateway-s2s': proof(), 'x-screenconnect-origin': 'https://portal.screenconnect.com', 'x-screenconnect-extension-id': '11111111-2222-4333-8444-555555555555' });
-  expect(state.response).toMatchObject({ apiSecret: vendor['x-screenconnect-api-secret'], origin: 'https://portal.screenconnect.com', extensionId: '11111111-2222-4333-8444-555555555555' }); expect(state.toolNames).toHaveLength(6);
+  expect(state.response).toMatchObject({ apiSecret: vendor['x-screenconnect-api-secret'], origin: 'https://portal.screenconnect.com', extensionId: '11111111-2222-4333-8444-555555555555' }); expect(state.toolNames).toHaveLength(7);
 });
-it('header tier requests never widen read-only tools', async () => { await request('/mcp', { ...vendor, 'x-gateway-s2s': proof(), 'x-conduit-tool-tiers': 'read,write,admin' }); expect(state.toolNames).toHaveLength(6); });
+it('header tier requests never widen read-only tools', async () => { await request('/mcp', { ...vendor, 'x-gateway-s2s': proof(), 'x-conduit-tool-tiers': 'read,write,admin' }); expect(state.toolNames).toHaveLength(7); });
 it('present empty tier header removes all tools', async () => { await request('/mcp', { ...vendor, 'x-gateway-s2s': proof(), 'x-conduit-tool-tiers': '' }); expect(state.toolNames).toHaveLength(0); });
 it('rejects private base URLs despite env escape hatch', async () => { vi.stubEnv('SCREENCONNECT_ALLOW_PRIVATE_BASE_URL', '1'); expect((await request('/mcp', { ...vendor, 'x-screenconnect-base-url': 'https://127.0.0.1', 'x-gateway-s2s': proof() })).status).toBe(400); });
 it('enforces allowed hosts', async () => { expect((await request('/mcp', { ...vendor, host: 'other.screenconnect.com', 'x-gateway-s2s': proof() })).status).toBe(403); });

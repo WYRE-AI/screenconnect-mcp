@@ -23,6 +23,7 @@ export function buildToolset(tiers: ReadonlySet<ToolTier>, defs: readonly ToolDe
     try {
       const def = enabled.find(d => d.tool.name === name);
       if (!def) throw new ArgumentError('Unknown or disabled tool.');
+      if (def.strictArgs && (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs) || Object.keys(rawArgs).some(k => !Object.hasOwn(def.tool.inputSchema.properties ?? {}, k)))) throw new ArgumentError('Expected an object with only declared arguments.');
       const args = pickDeclaredArgs(def.tool, rawArgs);
       if (def.tier === 'admin') requireConfirm(args);
       const value = await runWithAbortSignal(signal, () => def.handler(args, resolveCredentials()));

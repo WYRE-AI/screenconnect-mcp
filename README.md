@@ -32,6 +32,7 @@ Each upstream call is `POST {baseUrl}/App_Extensions/{extensionId}/Service.ashx/
 | `SCREENCONNECT_ORIGIN` | unset | Optional exact HTTPS origin for `RESTfulAllowedOrigin`. |
 | `SCREENCONNECT_EXTENSION_ID` | GUID above | Must be a GUID. |
 | `SCREENCONNECT_TOOL_TIERS` | `read` | Comma-separated `read,write,admin`. Unknown names stop startup. |
+| `SCREENCONNECT_HUNT_BUDGET_MS` | `120000` | Total hunt wall clock budget; clamps to 5000..600000 ms. |
 | `SCREENCONNECT_REQUEST_TIMEOUT_MS` | `30000` | Per-call timeout and retry budget; maximum 120000 ms. |
 | `SCREENCONNECT_MAX_RESPONSE_CHARS` | `60000` | MCP output cap after redaction; maximum 1000000. |
 | `SCREENCONNECT_MAX_UPSTREAM_BYTES` | `16777216` | Streaming body cap before JSON parsing; maximum 128 MiB. Oversize fails closed. |
@@ -57,6 +58,7 @@ Every tool supplies `readOnlyHint`, `destructiveHint`, and `idempotentHint`. Too
 | `screenconnect_sessions_get_by_name` | read | Exact session-name lookup. |
 | `screenconnect_session_get` | read | Session by GUID; empty upstream result becomes not found. |
 | `screenconnect_session_get_details` | read | Connections, integer `eventTypes` filter, newest-first events. |
+| `screenconnect_hunt_campaign` | read | Hunt the Nov 2026 campaign using session inventory, events and connections. |
 | `screenconnect_session_get_guest_info` | read | Guest inventory, online state, derived uptime. |
 | `screenconnect_session_add_note` | write | Append note. |
 | `screenconnect_session_send_message` | write | Message guest, with `byHost` defaulting to MCP. |
@@ -66,11 +68,65 @@ Every tool supplies `readOnlyHint`, `destructiveHint`, and `idempotentHint`. Too
 | `screenconnect_session_send_toolbox_item` | admin | Execute named toolbox item. |
 | `screenconnect_session_create` | admin | Create Support, Meeting or Access session. |
 
-Search fields: `sessionType`, `name`, `machineName`, `serialNumber`, `loggedOnUser`, `operatingSystem`, `customProperties` (map with keys `1` through `8`), and `onlineOnly`. Structured string values use single-quoted literals with doubled quotes. Advanced `filter` (max 4000 chars) cannot be combined with any structured field. Lists apply `limit` (default 50, max 500) and `offset` client-side and return `totalCount`; the upstream API still returns the entire matching list. Narrow filters to stay within the upstream byte cap. Read tools accept `includeRaw`; raw results are still redacted and capped.
+Search fields: `sessionType`, `name`, `machineName`, `serialNumber`, `loggedOnUser`, `operatingSystem`, `customProperties` (map with keys `1` through `8`), and `onlineOnly`. Structured string values use single-quoted literals with doubled quotes. Advanced `filter` (max 4000 chars) cannot be combined with any structured field. Lists apply `limit` (default 50, max 500) and `offset` client-side and return `totalCount`; the upstream API still returns the entire matching list. Narrow filters to stay within the upstream byte cap. Session inventory read tools accept `includeRaw`; raw results are still redacted and capped.
 
 Custom property updates are **read-modify-write**: fetch current values, merge supplied slots, then replace all eight. Empty strings clear slots. There is no compare-and-swap, so concurrent edits can be lost.
 
 Commands accept at most 8000 characters. `shell: powershell` prepends `#!ps`; optional `timeoutSeconds` (1..3600) adds `#timeout=<milliseconds>`. `waitForOutputSeconds` (0..60, default 0) polls details for a new EventType 70 event after the send timestamp and returns its Data. Timestamp correlation is best effort: another operator's command may produce the event, clock skew can prevent matching, and a polling timeout does not mean the command failed. Command submission is fire-and-forget and **never retried**. Do not resend automatically after an ambiguous result. Event timestamps in ISO or .NET `/Date(...) /` form are accepted. Missing inventory fields are tolerated; unavailable uptime is null.
+
+## Hunting the Nov 2026 campaign
+
+`screenconnect_hunt_campaign` is read-only, enabled in the default `read` tier, and requires no confirmation. It makes one `GetSessionsByFilter` call, scans the first `maxSessions` list records, and fetches `GetSessionDetailsBySessionID` with concurrency four. It checks inventory, client IDs, campaign infrastructure, dropped files, persistence markers, operators, host connections and commands/toolbox activity. It never opens a remote session or performs remediation.
+
+Example MCP call:
+
+```json
+{
+  "name": "screenconnect_hunt_campaign",
+  "arguments": {
+    "since": "2026-11-11T17:47:00Z",
+    "sessionType": "Access",
+    "maxSessions": 500,
+    "knownOperators": ["jsmith"],
+    "massThreshold": 5,
+    "massWindowMinutes": 15
+  }
+}
+```
+
+| Input | Default | Bounds / meaning |
+| --- | --- | --- |
+| `since` | `2026-11-11T17:47:00Z` | ISO-8601 timestamp with timezone; inclusive. |
+| `until` | Hunt start time | ISO timestamp strictly after `since`; inclusive. |
+| `sessionType` | `Access` | `Support`, `Meeting`, `Access`. |
+| `sessionFilter` | unset | Raw filter, at most 4000 characters; used as-is, overriding `sessionType`. |
+| `maxSessions` | 500 | Integer 1..5000; list pagination is client-side. |
+| `extraIocs` | unset | Up to 200 strings, each 3..500 characters; medium severity substring matches. |
+| `knownOperators` | unset | Up to 500 names, each at most 255 characters; case-insensitive allowlist. Omit to skip unknown-operator checks. `Addmin` is always checked. |
+| `massThreshold` | 5 | Integer 2..1000 distinct sessions. |
+| `massWindowMinutes` | 15 | Integer 1..1440; sliding window for identical normalized commands or toolbox names. |
+| `maxFindings` | 500 | Integer 1..5000; limits returned findings, with omitted count reported. |
+| `includeClean` | false | Accepted for compatibility; no clean-session list is returned. |
+
+IOC matching undoes common defanging, requires digit boundaries for IPs, and matches `Addmin` as a whole word in text or an exact actor name. Bare `screen` only matches an exact connection hostname/participant. `sqlite3.exe` alone is low confidence. Every command/toolbox event in the time window produces an informational finding. Mass execution strips PowerShell/timeout/maxlength directives and collapses whitespace before comparing text across distinct sessions. Clusters report maximal qualifying sliding windows; overlapping windows may share sessions. One mass-execution finding is added per involved session. Mass execution alone is medium severity; clusters with IOC hits are high severity.
+
+The summary reports full finding counts before truncation, flagged sessions (excluding info-only activity), earliest timestamped hit, detail-read errors, skipped sessions and partial coverage. Inventory hits have no event timestamp and are checked regardless of the event window; `earliestHit` is null when no timestamped hit exists. Connections count when their known start and optional end overlap the window; connections missing a start timestamp cannot establish coverage. Nested connection events use their own timestamps. Per-session errors preserve available results and include only generic sample messages. A failed initial search fails the tool. `SCREENCONNECT_HUNT_BUDGET_MS` bounds the entire hunt (default 120 seconds); budget expiry or caller cancellation stops launching detail reads and returns partial results after a successful initial search. Narrow the filter or adjust limits to follow up on partial results. The shared `SCREENCONNECT_MAX_RESPONSE_CHARS` output cap still applies; reduce `maxFindings` or increase that cap for large reports.
+
+Coverage gaps:
+
+- Panel login history and the ScreenConnect audit log are NOT available through the RESTful API Manager extension; check Administration > Audit in the SC web UI and the ConnectWise advisory.
+- Event/connection field names (`Host`, `ParticipantName`, `NetworkAddress`, `ProcessType`, event `Data` for toolbox items) are inferred from public prior art and unverified against a live instance. The parser tolerates actor aliases and integer or string event types; missing/invalid event times are skipped.
+- Endpoints with a rogue second ScreenConnect client that never connected to THIS instance will not appear; search client IDs and file IOCs with EDR/RMM.
+
+Response next steps (guidance only; the tool takes none of these actions):
+
+- Do NOT open GUI/backstage sessions on flagged machines: the campaign reverse-pivots onto tech workstations. Use EDR live response or WinRM instead.
+- Terminate all active web/host sessions and force sign-out of all users.
+- Rotate ScreenConnect credentials and the RESTful API Manager secret; verify MFA on every account and remove unknown users such as `Addmin`.
+- Remove rogue ScreenConnect client services (IDs `2588ef5c15954b10`, `ed630cc2c873b091`, or unknown instances), the `TrapWatch` task, `C:\ProgramData\RelayTrap\`, `%TEMP%\sckit-*` folders, HKCU/HKLM Run value `RelayTrapLiteAlert`, and dropped `sqlite3.exe`. Block IOC IPs/domains at the firewall/DNS filter.
+- Review the [ConnectWise security advisory resources](https://www.connectwise.com/company/trust/security-bulletins) and preserve logs before cleanup.
+
+IOC source attribution: public r/msp thread **“Active malware campaign abusing ScreenConnect” (Nov 11 2026)**, with corroborating public Blackpoint SOC reporting. Publisher discovery links: [r/msp thread title search](https://www.reddit.com/r/msp/search/?q=Active%20malware%20campaign%20abusing%20ScreenConnect&restrict_sr=1), [Blackpoint reporting](https://blackpointcyber.com/blog/). The supplied IOC set was implemented offline; these links are not independently verified article permalinks. To update the data, edit the grouped `{ value, kind, severity, note }` constants in [src/hunt/iocs.ts](src/hunt/iocs.ts), update `IOC_SET_VERSION`, and add matching/non-matching test fixtures. Keep customer names out of the IOC file and fixtures.
 
 ## HTTP / gateway
 

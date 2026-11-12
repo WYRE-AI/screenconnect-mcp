@@ -8,11 +8,11 @@ const transport = new StdioClientTransport({ command: process.execPath, args: ['
 try {
   await client.connect(transport);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 6);
+  assert.equal(tools.length, 7);
   assert(tools.every(t => t.annotations?.readOnlyHint));
   const invalid = await client.callTool({ name: 'screenconnect_session_get', arguments: { sessionId: 'invalid' } });
   assert.equal(invalid.isError, true);
   const admin = await client.callTool({ name: 'screenconnect_session_send_command', arguments: { confirm: true } });
   assert.equal(admin.isError, true);
-  console.log('smoke-stdio: OK (6 read tools; GUID rejection; admin hidden; no network)');
+  console.log('smoke-stdio: OK (7 read tools; GUID rejection; admin hidden; no network)');
 } finally { await client.close(); }
