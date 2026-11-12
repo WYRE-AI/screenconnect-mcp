@@ -1,0 +1,15 @@
+name: invalid session GUID rejected before upstream
+server:
+  command: node
+  args: [dist/index.js]
+  env:
+    SCREENCONNECT_BASE_URL: https://sc-eval.screenconnect.com
+    SCREENCONNECT_API_SECRET: eval-secret-not-real-0000
+assert:
+  tool: screenconnect_session_get
+  args:
+    sessionId: invalid
+  expect:
+    is_error: true
+    contains: ['invalid format']
+timeout: 30s

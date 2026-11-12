@@ -1,0 +1,27 @@
+services:
+  # Gateway mode. ScreenConnect credentials arrive per request on X-ScreenConnect-Base-Url,
+  # X-ScreenConnect-Api-Secret (optional Origin and Extension-Id). This service sets no SCREENCONNECT_*
+  # credentials and loads no env_file, so a project .env cannot inject static
+  # vendor credentials. Compose interpolates CONDUIT_S2S_SECRET from the shell.
+  screenconnect-mcp:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - MCP_TRANSPORT=http
+      - MCP_HTTP_PORT=8080
+      - MCP_HTTP_HOST=0.0.0.0
+      - AUTH_MODE=gateway
+      - SCREENCONNECT_TOOL_TIERS=${SCREENCONNECT_TOOL_TIERS:-read}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - CONDUIT_S2S_SECRET=${CONDUIT_S2S_SECRET:?set CONDUIT_S2S_SECRET}
+      # - MCP_ALLOWED_HOSTS=localhost,127.0.0.1
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

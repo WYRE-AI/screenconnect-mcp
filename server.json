@@ -1,0 +1,65 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.WYRE-AI/screenconnect-mcp",
+  "title": "ScreenConnect",
+  "description": "MCP server for ConnectWise ScreenConnect RESTful API Manager: session inventory and remote operations.",
+  "repository": {
+    "url": "https://github.com/WYRE-AI/screenconnect-mcp",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "websiteUrl": "https://github.com/WYRE-AI/screenconnect-mcp",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/wyre-ai/screenconnect-mcp:0.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "SCREENCONNECT_BASE_URL",
+          "description": "Your ScreenConnect server, e.g. https://<your-org>.screenconnect.com or an on-prem https URL.",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "SCREENCONNECT_API_SECRET",
+          "description": "RESTfulAuthenticationSecret, sent as CTRLAuthHeader.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "SCREENCONNECT_TOOL_TIERS",
+          "description": "Comma-separated tiers: read, write, admin. Default read only. Write and admin require explicit opt-in.",
+          "isRequired": false,
+          "default": "read",
+          "format": "string"
+        },
+        {
+          "name": "MCP_TRANSPORT",
+          "description": "Set to 'stdio' for local CLI use; the image defaults to 'http' for gateway hosting.",
+          "isRequired": false,
+          "default": "stdio",
+          "format": "string"
+        },
+        {
+          "name": "AUTH_MODE",
+          "description": "Credential source: 'env' reads SCREENCONNECT_* locally; 'gateway' expects X-ScreenConnect-* headers from the WYRE MCP Gateway.",
+          "isRequired": false,
+          "default": "env",
+          "format": "string"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "description": "Log verbosity: debug, info, warn, error",
+          "isRequired": false,
+          "default": "info",
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

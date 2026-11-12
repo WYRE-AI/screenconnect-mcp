@@ -1,0 +1,20 @@
+import { createHmac } from 'node:crypto';
+import { expect, it, vi } from 'vitest';
+import { resolveHttpConfig } from '../http.js';
+import { verifyS2sHeader } from '../s2s-verify.js';
+import { resolveCredentials } from '../client.js';
+const fakeSecret = 'test-only-s2s-value-0123456789abcdef';
+it('HTTP startup fails closed without S2S', () => { expect(() => resolveHttpConfig({ AUTH_MODE: 'gateway' })).toThrow('CONDUIT_S2S_SECRET'); });
+it.each(['changeme', 'a'.repeat(64), 'your-secret'])('rejects placeholder S2S %s', secret => { expect(() => resolveHttpConfig({ AUTH_MODE: 'gateway', CONDUIT_S2S_SECRET: secret, MCP_ALLOW_INSECURE_DEV: '1' })).toThrow(); });
+it('insecure dev binds only loopback', () => { expect(resolveHttpConfig({ AUTH_MODE: 'gateway', MCP_ALLOW_INSECURE_DEV: '1', MCP_HTTP_HOST: '0.0.0.0' }).host).toBe('127.0.0.1'); });
+it('gateway starts without environment credentials', () => { expect(resolveHttpConfig({ AUTH_MODE: 'gateway', CONDUIT_S2S_SECRET: fakeSecret }).authMode).toBe('gateway'); });
+it('env startup needs vendor credentials', () => { expect(() => resolveHttpConfig({ CONDUIT_S2S_SECRET: fakeSecret })).toThrow('SCREENCONNECT'); });
+it('validates env extension ID at startup', () => { expect(() => resolveHttpConfig({ CONDUIT_S2S_SECRET: fakeSecret, SCREENCONNECT_BASE_URL: 'https://sc-eval.screenconnect.com', SCREENCONNECT_API_SECRET: 'eval-secret-not-real-0000', SCREENCONNECT_EXTENSION_ID: 'bad' })).toThrow('GUID'); });
+it('S2S verifies current signed proofs and rejects stale/bad/missing proofs', () => {
+  const t = Math.floor(Date.now() / 1000); const signature = createHmac('sha256', fakeSecret).update(`t=${t}`).digest('hex');
+  expect(verifyS2sHeader(`t=${t},v1=${signature}`, fakeSecret)).toBe(true);
+  expect(verifyS2sHeader(`t=${t - 1000},v1=${signature}`, fakeSecret)).toBe(false);
+  expect(verifyS2sHeader(`t=${t},v1=${'0'.repeat(64)}`, fakeSecret)).toBe(false);
+  expect(verifyS2sHeader(undefined, fakeSecret)).toBe(false); expect(verifyS2sHeader('', '')).toBe(false);
+});
+it('invalid auth mode fails closed and never uses env credentials', () => { vi.stubEnv('AUTH_MODE', 'typo'); expect(resolveCredentials).toThrow('fallback'); expect(() => resolveHttpConfig({ AUTH_MODE: 'typo' })).toThrow('AUTH_MODE'); });
